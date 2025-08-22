@@ -18,6 +18,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -340,7 +341,9 @@ func TestDeleteContainerOnStartupError(t *testing.T) {
 
 func TestFindDriver(t *testing.T) {
 	env := testEnvironment()
-	manager := service.DefaultManager{Environment: env, Config: testConfig(env)}
+	cfg := testConfig(env)
+	cfg.Browsers["internet explorer"].Versions["11"].Image = []interface{}{"/bin/true"}
+	manager := service.DefaultManager{Environment: env, Config: cfg}
 	caps := session.Caps{
 		Name:             "internet explorer", //Using default version
 		ScreenResolution: "1024x768",
@@ -349,6 +352,65 @@ func TestFindDriver(t *testing.T) {
 	starter, success := manager.Find(caps, 42)
 	AssertThat(t, success, Is{true})
 	AssertThat(t, starter, Not{nil})
+}
+
+func testConfigWithDriver(env *service.Environment) *config.Config {
+	conf := testConfig(env)
+	conf.Browsers["test-driver"] = config.Versions{
+		Default: "1.0",
+		Versions: map[string]*config.Browser{
+			"1.0": {
+				Image: []interface{}{
+					"./testing/http_server/server",
+				},
+				Path: "/status",
+			},
+		},
+	}
+	return conf
+}
+
+func TestStartDriver(t *testing.T) {
+	serviceStartupTimeout = 15 * time.Second
+	env := testEnvironment()
+	manager := service.DefaultManager{Environment: env, Config: testConfigWithDriver(env)}
+	caps := session.Caps{
+		Name: "test-driver",
+		VNC:  true,
+	}
+	starter, success := manager.Find(caps, 42)
+	AssertThat(t, success, Is{true})
+	AssertThat(t, starter, Not{nil})
+
+	startedService, err := starter.StartWithCancel()
+	AssertThat(t, err, Is{nil})
+	AssertThat(t, startedService.Url, Not{nil})
+	AssertThat(t, startedService.HostPort.VNC, EqualTo{"127.0.0.1:5900"})
+	AssertThat(t, startedService.Cancel, Not{nil})
+	startedService.Cancel()
+}
+
+func TestStartDriverWithLogs(t *testing.T) {
+	serviceStartupTimeout = 15 * time.Second
+	env := testEnvironment()
+	env.SaveAllLogs = true
+	manager := service.DefaultManager{Environment: env, Config: testConfigWithDriver(env)}
+	caps := session.Caps{
+		Name:    "test-driver",
+		Log:     true,
+		LogName: "test.log",
+	}
+	starter, success := manager.Find(caps, 42)
+	AssertThat(t, success, Is{true})
+	AssertThat(t, starter, Not{nil})
+
+	startedService, err := starter.StartWithCancel()
+	AssertThat(t, err, Is{nil})
+	startedService.Cancel()
+
+	logFile := filepath.Join(env.LogOutputDir, "test.log")
+	_, err = os.Stat(logFile)
+	AssertThat(t, err, Is{nil})
 }
 
 func TestGetVNC(t *testing.T) {
